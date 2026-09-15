@@ -1162,7 +1162,168 @@ else:
 
 
 # ============================================================
-# 14. TABLA DE ÓRDENES / SKU PRIORIZADOS
+# 14. PRIORIZACIÓN 80/20 DE SKU POR RIESGO ECONÓMICO
+# ============================================================
+
+st.markdown("### Priorización 80/20 por riesgo económico")
+st.caption(
+    "El SIAD prioriza el 20% de los SKU con mayor exposición económica al riesgo, "
+    "combinando el IRI con el valor del stock."
+)
+
+if col_sku is not None and col_iri is not None and col_valor is not None:
+    pareto = base_filtrada.copy()
+    pareto["_iri_num"] = pd.to_numeric(pareto[col_iri], errors="coerce").fillna(0)
+    pareto["_valor_num"] = pd.to_numeric(pareto[col_valor], errors="coerce").fillna(0)
+
+    if col_stock is not None:
+        pareto["_stock_num"] = pd.to_numeric(pareto[col_stock], errors="coerce").fillna(0)
+
+    agg = {
+        "IRI": ("_iri_num", "max"),
+        "Valor_stock": ("_valor_num", "sum"),
+    }
+    if col_stock is not None:
+        agg["Stock"] = ("_stock_num", "sum")
+
+    resumen_pareto = (
+        pareto.groupby(col_sku, as_index=False)
+        .agg(**agg)
+    )
+
+    # Exposición económica al riesgo:
+    # IRI se expresa 0-100, por lo que se convierte a probabilidad 0-1.
+    resumen_pareto["Riesgo_economico"] = (
+        (resumen_pareto["IRI"].clip(0, 100) / 100.0)
+        * resumen_pareto["Valor_stock"].clip(lower=0)
+    )
+
+    resumen_pareto = (
+        resumen_pareto
+        .sort_values(["Riesgo_economico", "IRI", "Valor_stock"],
+                     ascending=[False, False, False])
+        .reset_index(drop=True)
+    )
+
+    n_total = len(resumen_pareto)
+
+    if n_total > 0:
+        # Regla de gestión: seleccionar exactamente el 20% superior
+        # (redondeado hacia arriba) por riesgo económico.
+        n_top20 = max(1, int(math.ceil(n_total * 0.20)))
+
+        resumen_pareto["Prioridad_80_20"] = "Seguimiento"
+        resumen_pareto.loc[:n_top20 - 1, "Prioridad_80_20"] = "PRIORITARIO 20%"
+
+        total_riesgo_economico = resumen_pareto["Riesgo_economico"].sum()
+        riesgo_top20 = resumen_pareto.loc[:n_top20 - 1, "Riesgo_economico"].sum()
+
+        participacion_top20 = (
+            riesgo_top20 / total_riesgo_economico * 100
+            if total_riesgo_economico > 0 else np.nan
+        )
+
+        # Participación acumulada observada del costo-riesgo.
+        if total_riesgo_economico > 0:
+            resumen_pareto["Riesgo_economico_acumulado_%"] = (
+                resumen_pareto["Riesgo_economico"].cumsum()
+                / total_riesgo_economico * 100
+            )
+        else:
+            resumen_pareto["Riesgo_economico_acumulado_%"] = 0.0
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("SKU analizados", formato_entero(n_total))
+        k2.metric("20% SKU prioritarios", formato_entero(n_top20))
+        k3.metric(
+            "Costo-riesgo del Top 20%",
+            formato_moneda(riesgo_top20),
+        )
+        k4.metric(
+            "% problemática económica concentrada",
+            f"{participacion_top20:.1f}%"
+            if pd.notna(participacion_top20) else "N/D",
+        )
+
+        if pd.notna(participacion_top20):
+            if participacion_top20 >= 80:
+                st.success(
+                    f"Regla 80/20 verificada en los datos: el 20% de los SKU "
+                    f"con mayor combinación de riesgo y costo concentra "
+                    f"{participacion_top20:.1f}% de la exposición económica al riesgo."
+                )
+            else:
+                st.info(
+                    f"El 20% de los SKU con mayor combinación de riesgo y costo "
+                    f"concentra actualmente {participacion_top20:.1f}% de la exposición "
+                    f"económica al riesgo. El 80% se mantiene como referencia de Pareto, "
+                    f"sin forzar el resultado observado."
+                )
+
+        # Visualización Pareto: costo-riesgo individual + acumulado.
+        fig_pareto = go.Figure()
+        fig_pareto.add_trace(
+            go.Bar(
+                x=resumen_pareto[col_sku].astype(str),
+                y=resumen_pareto["Riesgo_economico"],
+                name="Riesgo económico",
+            )
+        )
+        fig_pareto.add_trace(
+            go.Scatter(
+                x=resumen_pareto[col_sku].astype(str),
+                y=resumen_pareto["Riesgo_economico_acumulado_%"],
+                name="Riesgo económico acumulado (%)",
+                yaxis="y2",
+                mode="lines",
+            )
+        )
+        fig_pareto.update_layout(
+            title="Pareto de SKU por exposición económica al riesgo",
+            xaxis_title="SKU ordenados por IRI × valor de stock",
+            yaxis=dict(title="Riesgo económico"),
+            yaxis2=dict(
+                title="Acumulado (%)",
+                overlaying="y",
+                side="right",
+                range=[0, 105],
+            ),
+            legend=dict(orientation="h"),
+        )
+        st.plotly_chart(fig_pareto, use_container_width=True)
+
+        columnas = [
+            col_sku,
+            "IRI",
+            "Valor_stock",
+            "Riesgo_economico",
+            "Riesgo_economico_acumulado_%",
+            "Prioridad_80_20",
+        ]
+        if "Stock" in resumen_pareto.columns:
+            columnas.insert(2, "Stock")
+
+        tabla_8020 = resumen_pareto[columnas].copy()
+        tabla_8020["Riesgo_economico_acumulado_%"] = (
+            tabla_8020["Riesgo_economico_acumulado_%"].round(1)
+        )
+
+        st.dataframe(
+            tabla_8020,
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No existen SKU disponibles para calcular la priorización 80/20.")
+else:
+    st.info(
+        "Para calcular la priorización 80/20 económica se requieren SKU, IRI "
+        "y valor de stock en las salidas del modelo."
+    )
+
+
+# ============================================================
+# 15. TABLA DE ÓRDENES / SKU PRIORIZADOS
 # ============================================================
 
 st.markdown("### Priorización de órdenes y materiales")
@@ -1215,7 +1376,7 @@ else:
 
 
 # ============================================================
-# 15. NOTAS METODOLÓGICAS
+# 16. NOTAS METODOLÓGICAS
 # ============================================================
 
 with st.expander("Notas metodológicas"):
