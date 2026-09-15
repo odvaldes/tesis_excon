@@ -319,10 +319,28 @@ def enriquecer_cobertura_desde_nb2(base: pd.DataFrame, nb2: pd.DataFrame | None)
         return out
 
     cob_out = primera_columna_existente(
-        out, ["cobertura_meses", "cobertura_stock_meses", "meses_cobertura", "cobertura"]
+        out, [
+            "cobertura_mes_estimada",
+            "cobertura_meses_estimada",
+            "cobertura_mes_estimado",
+            "cobertura_meses_estimadas",
+            "cobertura_meses",
+            "cobertura_stock_meses",
+            "meses_cobertura",
+            "cobertura",
+        ]
     )
     cob_nb2 = primera_columna_existente(
-        aux, ["cobertura_meses", "cobertura_stock_meses", "meses_cobertura", "cobertura"]
+        aux, [
+            "cobertura_mes_estimada",
+            "cobertura_meses_estimada",
+            "cobertura_mes_estimado",
+            "cobertura_meses_estimadas",
+            "cobertura_meses",
+            "cobertura_stock_meses",
+            "meses_cobertura",
+            "cobertura",
+        ]
     )
     stock_nb2 = primera_columna_existente(
         aux,
