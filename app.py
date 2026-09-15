@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 """
 Dashboard Streamlit - Gestión Predictiva de Inventario EXCON
@@ -401,6 +400,13 @@ col_descripcion = primera_columna_existente(
         "descripcion_linea",
         "descripcion_inventario",
     ],
+)
+
+col_cobertura = primera_columna_existente(
+    base_dashboard, ["cobertura_meses","cobertura_stock_meses","meses_cobertura","cobertura"]
+)
+col_criticidad = primera_columna_existente(
+    base_dashboard, ["criticidad","clasificacion_vep","vep","tipo_material"]
 )
 
 
@@ -1073,7 +1079,90 @@ with tab_matriz:
 
 
 # ============================================================
-# 13. TABLA DE ÓRDENES / SKU PRIORIZADOS
+# 13. CASO DE DECISIÓN SIAD
+# ============================================================
+st.markdown("### Caso de decisión — transferencia antes de nueva compra")
+st.caption("Contrasta stock e IRI de un contrato con la necesidad del mismo SKU en otro contrato.")
+
+if all(x is not None for x in [col_sku, col_centro, col_stock, col_iri]):
+    caso = base_dashboard.copy()
+    caso["_sku"] = caso[col_sku].astype(str)
+    caso["_centro"] = caso[col_centro].astype(str)
+    caso["_stock"] = pd.to_numeric(caso[col_stock], errors="coerce").fillna(0)
+    caso["_iri"] = pd.to_numeric(caso[col_iri], errors="coerce")
+    caso["_cobertura"] = (pd.to_numeric(caso[col_cobertura], errors="coerce")
+                           if col_cobertura else np.nan)
+    caso["_criticidad"] = (caso[col_criticidad].fillna("Sin clasificación").astype(str)
+                            if col_criticidad else "Esencial")
+
+    ncentros = caso.groupby("_sku")["_centro"].nunique()
+    candidatos = caso[
+        (caso["_stock"] > 0) & (caso["_iri"] >= 81) &
+        caso["_sku"].isin(ncentros[ncentros >= 2].index)
+    ].sort_values(["_iri","_stock"], ascending=False)
+
+    if candidatos.empty:
+        candidatos = caso[(caso["_stock"] > 0) & (caso["_iri"] >= 81)].sort_values(
+            ["_iri","_stock"], ascending=False
+        )
+
+    if candidatos.empty:
+        st.warning("El scoring actual no contiene SKU con IRI ≥ 81 y stock positivo.")
+    else:
+        sku_caso = st.selectbox("SKU a evaluar", candidatos["_sku"].drop_duplicates().tolist())
+        filas = caso[caso["_sku"] == sku_caso]
+        origenes = filas[(filas["_stock"] > 0) & (filas["_iri"] >= 81)]
+        centros_a = origenes["_centro"].drop_duplicates().tolist()
+        contrato_a = st.selectbox("Contrato A — origen del stock", centros_a)
+        a = origenes[origenes["_centro"] == contrato_a].sort_values("_iri",ascending=False).iloc[0]
+
+        destinos = [x for x in filas["_centro"].drop_duplicates().tolist() if x != contrato_a]
+        c1,c2 = st.columns(2)
+        with c1:
+            contrato_b = st.selectbox("Contrato B — necesita el SKU", destinos) if destinos else st.text_input(
+                "Contrato B — necesita el SKU", "Contrato B")
+        with c2:
+            necesidad = st.number_input("Necesidad Contrato B (unidades)", min_value=1.0, value=40.0, step=1.0)
+
+        stock=float(a["_stock"]); iri=float(a["_iri"])
+        cobertura=float(a["_cobertura"]) if pd.notna(a["_cobertura"]) else np.nan
+        criticidad=str(a["_criticidad"])
+
+        m1,m2,m3,m4,m5=st.columns(5)
+        m1.metric("SKU",sku_caso)
+        m2.metric("Stock Contrato A",formato_entero(stock))
+        m3.metric("Cobertura",f"{cobertura:.1f} meses" if pd.notna(cobertura) else "N/D")
+        m4.metric("IRI",f"{iri:.0f}")
+        m5.metric("Criticidad",criticidad)
+
+        cobertura_ok = pd.isna(cobertura) or cobertura > 2
+        factible = iri >= 81 and stock >= necesidad and cobertura_ok
+
+        if factible:
+            transferir=min(stock,necesidad)
+            st.success("SISTEMA RECOMIENDA")
+            st.markdown("### Revisar transferencia antes de generar nueva compra")
+            st.write(
+                f"El {contrato_a} dispone de {formato_entero(stock)} unidades del SKU {sku_caso}, "
+                f"con IRI {iri:.0f}. El {contrato_b} requiere {formato_entero(necesidad)} unidades. "
+                f"Se recomienda evaluar la transferencia de {formato_entero(transferir)} unidades "
+                "antes de iniciar una nueva adquisición."
+            )
+            r1,r2,r3=st.columns(3)
+            r1.metric("Transferencia propuesta",f"{formato_entero(transferir)} unidades")
+            r2.metric("Stock A posterior",f"{formato_entero(stock-transferir)} unidades")
+            r3.metric("Compra potencialmente evitada",f"{formato_entero(transferir)} unidades")
+        else:
+            st.warning("REVISIÓN REQUERIDA")
+            st.write("Los parámetros seleccionados no cumplen simultáneamente las condiciones para recomendar transferencia.")
+
+        st.caption("Recomendación de apoyo a la decisión; requiere validación técnica, operacional y contractual.")
+else:
+    st.info("La base activa requiere SKU, centro de costo/contrato, stock e IRI para evaluar transferencias.")
+
+
+# ============================================================
+# 14. TABLA DE ÓRDENES / SKU PRIORIZADOS
 # ============================================================
 
 st.markdown("### Priorización de órdenes y materiales")
@@ -1126,7 +1215,7 @@ else:
 
 
 # ============================================================
-# 14. NOTAS METODOLÓGICAS
+# 15. NOTAS METODOLÓGICAS
 # ============================================================
 
 with st.expander("Notas metodológicas"):
