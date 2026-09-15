@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+
 """
 Dashboard Streamlit - Gestión Predictiva de Inventario EXCON
 Notebook 4 / Aplicación Streamlit
@@ -6,7 +6,6 @@ Notebook 4 / Aplicación Streamlit
 Archivos esperados dentro de la carpeta salidas_modelo:
 - Dataset_Modelo_EXCON.parquet o .pkl o .xlsx
 - Dataset_Scoring_Actual_EXCON.parquet o .pkl o .xlsx
-- Comparacion_Modelos_EXCON.xlsx
 - Metricas_Test_EXCON.xlsx
 - Importancia_Variables_EXCON.xlsx
 - Resultados_Test_IRI_EXCON.xlsx
@@ -200,9 +199,6 @@ dataset_scoring, ruta_dataset_scoring = cargar_opcional(
 scoring_iri, ruta_scoring_iri = cargar_opcional(
     "Scoring_Actual_IRI_EXCON"
 )
-comparacion_modelos, ruta_comparacion = cargar_opcional(
-    "Comparacion_Modelos_EXCON"
-)
 metricas_test, ruta_metricas = cargar_opcional(
     "Metricas_Test_EXCON"
 )
@@ -241,7 +237,6 @@ if ruta_reporte_nb2 is not None and ruta_reporte_nb2.suffix.lower() == ".xlsx":
 dataset_modelo = normalizar_columnas(dataset_modelo)
 dataset_scoring = normalizar_columnas(dataset_scoring)
 scoring_iri = normalizar_columnas(scoring_iri)
-comparacion_modelos = normalizar_columnas(comparacion_modelos)
 metricas_test = normalizar_columnas(metricas_test)
 importancia_variables = normalizar_columnas(importancia_variables)
 resultados_test = normalizar_columnas(resultados_test)
@@ -265,7 +260,6 @@ archivos_cargados = {
     "Dataset modelo": ruta_dataset_modelo,
     "Dataset scoring": ruta_dataset_scoring,
     "Scoring IRI": ruta_scoring_iri,
-    "Comparación modelos": ruta_comparacion,
     "Métricas test": ruta_metricas,
     "Importancia variables": ruta_importancia,
     "Resultados test": ruta_resultados_test,
@@ -287,117 +281,6 @@ with st.sidebar:
         "La aplicación busca archivos dentro de "
         "`salidas_modelo/`, `data/` o la carpeta raíz."
     )
-
-
-
-# ============================================================
-# 4B. COBERTURA DESDE SALIDAS DEL NOTEBOOK 2
-# ============================================================
-
-def enriquecer_cobertura_desde_nb2(base: pd.DataFrame, nb2: pd.DataFrame | None):
-    """
-    Completa cobertura_meses en la base de scoring (Notebook 3) usando
-    Dataset_Scoring_Actual_EXCON (Notebook 2), cruzando por SKU + centro de costo.
-
-    Prioridad:
-    1) cobertura existente en Notebook 3;
-    2) cobertura existente en Notebook 2;
-    3) cálculo stock / consumo promedio mensual de 12 meses desde Notebook 2.
-    """
-    if base is None or base.empty or nb2 is None or nb2.empty:
-        return base
-
-    out = base.copy()
-    aux = nb2.copy()
-
-    sku_out = primera_columna_existente(out, ["sku", "no_producto", "n_producto"])
-    cc_out = primera_columna_existente(out, ["centro_costo", "centro_costo_final"])
-    sku_nb2 = primera_columna_existente(aux, ["sku", "no_producto", "n_producto"])
-    cc_nb2 = primera_columna_existente(aux, ["centro_costo", "centro_costo_final"])
-
-    if not all([sku_out, cc_out, sku_nb2, cc_nb2]):
-        return out
-
-    cob_out = primera_columna_existente(
-        out, [
-            "cobertura_mes_estimada",
-            "cobertura_meses_estimada",
-            "cobertura_mes_estimado",
-            "cobertura_meses_estimadas",
-            "cobertura_meses",
-            "cobertura_stock_meses",
-            "meses_cobertura",
-            "cobertura",
-        ]
-    )
-    cob_nb2 = primera_columna_existente(
-        aux, [
-            "cobertura_mes_estimada",
-            "cobertura_meses_estimada",
-            "cobertura_mes_estimado",
-            "cobertura_meses_estimadas",
-            "cobertura_meses",
-            "cobertura_stock_meses",
-            "meses_cobertura",
-            "cobertura",
-        ]
-    )
-    stock_nb2 = primera_columna_existente(
-        aux,
-        ["stock_contable_actual", "stock_actual_total", "stock_estimado_positivo", "stock_estimado"]
-    )
-    consumo_nb2 = primera_columna_existente(
-        aux,
-        [
-            "prom_consumo_12m",
-            "consumo_promedio_12m",
-            "promedio_consumo_12m",
-            "consumo_mensual_promedio_12m",
-        ],
-    )
-
-    aux["_key_sku"] = aux[sku_nb2].astype(str).str.strip()
-    aux["_key_cc"] = aux[cc_nb2].astype(str).str.strip()
-
-    # Si Notebook 2 no trae cobertura explícita, calcularla.
-    if cob_nb2 is not None:
-        aux["_cobertura_nb2"] = pd.to_numeric(aux[cob_nb2], errors="coerce")
-    elif stock_nb2 is not None and consumo_nb2 is not None:
-        stock = pd.to_numeric(aux[stock_nb2], errors="coerce")
-        consumo = pd.to_numeric(aux[consumo_nb2], errors="coerce")
-        aux["_cobertura_nb2"] = np.where(
-            consumo > 0,
-            stock.clip(lower=0) / consumo,
-            np.nan,
-        )
-    else:
-        return out
-
-    # Una fila de referencia por SKU-centro. Si existe mes, usar la más reciente.
-    fecha_nb2 = primera_columna_existente(
-        aux, ["mes", "fecha", "fecha_corte", "fecha_registro"]
-    )
-    if fecha_nb2 is not None:
-        aux["_fecha_nb2"] = pd.to_datetime(aux[fecha_nb2], errors="coerce")
-        aux = aux.sort_values("_fecha_nb2")
-
-    mapa = (
-        aux[["_key_sku", "_key_cc", "_cobertura_nb2"]]
-        .drop_duplicates(["_key_sku", "_key_cc"], keep="last")
-    )
-
-    out["_key_sku"] = out[sku_out].astype(str).str.strip()
-    out["_key_cc"] = out[cc_out].astype(str).str.strip()
-    out = out.merge(mapa, on=["_key_sku", "_key_cc"], how="left")
-
-    if cob_out is None:
-        out["cobertura_meses"] = out["_cobertura_nb2"]
-    else:
-        actual = pd.to_numeric(out[cob_out], errors="coerce")
-        out["cobertura_meses"] = actual.fillna(out["_cobertura_nb2"])
-
-    out.drop(columns=["_key_sku", "_key_cc", "_cobertura_nb2"], inplace=True, errors="ignore")
-    return out
 
 
 # ============================================================
@@ -428,22 +311,7 @@ if base_dashboard is None:
     )
     st.stop()
 
-# Complementa Notebook 3 con cobertura proveniente de Notebook 2.
-if dataset_scoring is not None and not dataset_scoring.empty:
-    base_dashboard = enriquecer_cobertura_desde_nb2(
-        base_dashboard,
-        dataset_scoring,
-    )
-
 st.sidebar.info(f"Base activa: {nombre_base_dashboard}")
-if "cobertura_meses" in base_dashboard.columns:
-    cobertura_disponible = pd.to_numeric(
-        base_dashboard["cobertura_meses"], errors="coerce"
-    ).notna().sum()
-    st.sidebar.caption(
-        f"Cobertura disponible para {formato_entero(cobertura_disponible)} registros "
-        "(Notebook 3 + complemento Notebook 2)."
-    )
 
 
 # ============================================================
@@ -1058,57 +926,10 @@ if metricas_test is not None and not metricas_test.empty:
 else:
     st.info("No se encontró `Metricas_Test_EXCON.xlsx`.")
 
-tab_modelos, tab_importancia, tab_matriz = st.tabs([
-    "Comparación de modelos",
+tab_importancia, tab_matriz = st.tabs([
     "Importancia de variables",
     "Matriz de confusión",
 ])
-
-with tab_modelos:
-    if comparacion_modelos is not None and not comparacion_modelos.empty:
-        columnas_grafico = [
-            columna
-            for columna in [
-                "modelo",
-                "roc_auc",
-                "pr_auc",
-                "precision",
-                "recall",
-                "f1",
-                "f2",
-            ]
-            if columna in comparacion_modelos.columns
-        ]
-
-        st.dataframe(
-            comparacion_modelos[columnas_grafico],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        metricas_largas = comparacion_modelos[
-            columnas_grafico
-        ].melt(
-            id_vars=["modelo"],
-            var_name="Métrica",
-            value_name="Valor",
-        )
-
-        fig_modelos = px.bar(
-            metricas_largas,
-            x="modelo",
-            y="Valor",
-            color="Métrica",
-            barmode="group",
-            title="Comparación de modelos predictivos",
-        )
-
-        st.plotly_chart(
-            fig_modelos,
-            use_container_width=True,
-        )
-    else:
-        st.info("No se encontró la comparación de modelos.")
 
 with tab_importancia:
     if importancia_variables is not None and not importancia_variables.empty:
@@ -1250,8 +1071,6 @@ if all(x is not None for x in [col_sku, col_centro, col_stock, col_iri]):
     caso["_centro"] = caso[col_centro].astype(str)
     caso["_stock"] = pd.to_numeric(caso[col_stock], errors="coerce").fillna(0)
     caso["_iri"] = pd.to_numeric(caso[col_iri], errors="coerce")
-    caso["_cobertura"] = (pd.to_numeric(caso[col_cobertura], errors="coerce")
-                           if col_cobertura else np.nan)
     caso["_criticidad"] = (caso[col_criticidad].fillna("Sin clasificación").astype(str)
                             if col_criticidad else "Esencial")
 
@@ -1285,7 +1104,6 @@ if all(x is not None for x in [col_sku, col_centro, col_stock, col_iri]):
             necesidad = st.number_input("Necesidad Contrato B (unidades)", min_value=1.0, value=40.0, step=1.0)
 
         stock=float(a["_stock"]); iri=float(a["_iri"])
-        cobertura=float(a["_cobertura"]) if pd.notna(a["_cobertura"]) else np.nan
         criticidad=str(a["_criticidad"])
 
         valor_stock_a = (
@@ -1309,12 +1127,11 @@ if all(x is not None for x in [col_sku, col_centro, col_stock, col_iri]):
         else:
             nivel_economico_a = "N/D"
 
-        m1,m2,m3,m4,m5=st.columns(5)
+        m1,m2,m3,m4=st.columns(4)
         m1.metric("SKU",sku_caso)
         m2.metric("Stock Contrato A",formato_entero(stock))
-        m3.metric("Cobertura",f"{cobertura:.1f} meses" if pd.notna(cobertura) else "N/D")
-        m4.metric("IRI",f"{iri:.0f}")
-        m5.metric("Criticidad",criticidad)
+        m3.metric("IRI",f"{iri:.0f}")
+        m4.metric("Criticidad",criticidad)
 
         e1, e2, e3 = st.columns(3)
         e1.metric(
@@ -1340,8 +1157,7 @@ if all(x is not None for x in [col_sku, col_centro, col_stock, col_iri]):
                 f"**{formato_moneda(riesgo_economico_a)}**."
             )
 
-        cobertura_ok = pd.isna(cobertura) or cobertura > 2
-        factible = iri >= 81 and stock >= necesidad and cobertura_ok
+        factible = iri >= 81 and stock >= necesidad
 
         if factible:
             transferir=min(stock,necesidad)
@@ -1601,10 +1417,6 @@ with st.expander("Notas metodológicas"):
     st.markdown(
         """
         - La unidad de análisis del modelo es **SKU–centro de costo–mes**.
-        - La **cobertura** se toma del scoring cuando está disponible; en caso contrario,
-          se recupera desde `Dataset_Scoring_Actual_EXCON` del Notebook 2 mediante
-          **SKU + centro de costo**. Si Notebook 2 contiene stock y consumo promedio
-          mensual de 12 meses, se calcula como **Stock / consumo promedio mensual 12m**.
         - El IRI corresponde a la probabilidad calibrada de inmovilización,
           expresada entre 0 y 100.
         - Las categorías propuestas son: Muy Bajo, Bajo, Medio, Alto y Muy Alto.
