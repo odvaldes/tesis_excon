@@ -1078,6 +1078,40 @@ with tab_matriz:
         st.info("No existen métricas para construir la matriz.")
 
 
+
+# ============================================================
+# FUNCIÓN DE RIESGO ECONÓMICO
+# ============================================================
+
+def calcular_riesgo_economico(iri, valor_stock):
+    """
+    Exposición económica al riesgo = (IRI / 100) * valor del stock.
+    El IRI se interpreta en escala 0-100.
+    """
+    try:
+        return (max(0.0, min(float(iri), 100.0)) / 100.0) * max(float(valor_stock), 0.0)
+    except Exception:
+        return np.nan
+
+
+def nivel_riesgo_economico(valor, serie_referencia):
+    """
+    Clasificación relativa respecto de la distribución de riesgo económico:
+    BAJO <= P50; MEDIO > P50 y <= P80; ALTO > P80.
+    """
+    s = pd.to_numeric(serie_referencia, errors="coerce").dropna()
+    s = s[s >= 0]
+    if pd.isna(valor) or s.empty:
+        return "N/D"
+    p50 = s.quantile(0.50)
+    p80 = s.quantile(0.80)
+    if valor > p80:
+        return "ALTO"
+    if valor > p50:
+        return "MEDIO"
+    return "BAJO"
+
+
 # ============================================================
 # 13. CASO DE DECISIÓN SIAD
 # ============================================================
@@ -1128,12 +1162,57 @@ if all(x is not None for x in [col_sku, col_centro, col_stock, col_iri]):
         cobertura=float(a["_cobertura"]) if pd.notna(a["_cobertura"]) else np.nan
         criticidad=str(a["_criticidad"])
 
+        valor_stock_a = (
+            float(pd.to_numeric(a[col_valor], errors="coerce"))
+            if col_valor is not None and pd.notna(pd.to_numeric(a[col_valor], errors="coerce"))
+            else np.nan
+        )
+        riesgo_economico_a = (
+            calcular_riesgo_economico(iri, valor_stock_a)
+            if pd.notna(valor_stock_a) else np.nan
+        )
+
+        # Distribución de referencia para clasificar el riesgo económico del SKU.
+        if col_valor is not None:
+            ref_iri = pd.to_numeric(base_dashboard[col_iri], errors="coerce").fillna(0)
+            ref_valor = pd.to_numeric(base_dashboard[col_valor], errors="coerce").fillna(0)
+            ref_riesgo_economico = (ref_iri.clip(0,100) / 100.0) * ref_valor.clip(lower=0)
+            nivel_economico_a = nivel_riesgo_economico(
+                riesgo_economico_a, ref_riesgo_economico
+            )
+        else:
+            nivel_economico_a = "N/D"
+
         m1,m2,m3,m4,m5=st.columns(5)
         m1.metric("SKU",sku_caso)
         m2.metric("Stock Contrato A",formato_entero(stock))
         m3.metric("Cobertura",f"{cobertura:.1f} meses" if pd.notna(cobertura) else "N/D")
         m4.metric("IRI",f"{iri:.0f}")
         m5.metric("Criticidad",criticidad)
+
+        e1, e2, e3 = st.columns(3)
+        e1.metric(
+            "Valor stock",
+            formato_moneda(valor_stock_a) if pd.notna(valor_stock_a) else "N/D",
+        )
+        e2.metric(
+            "Riesgo económico",
+            formato_moneda(riesgo_economico_a) if pd.notna(riesgo_economico_a) else "N/D",
+        )
+        e3.metric("Nivel de riesgo económico", nivel_economico_a)
+
+        st.markdown("**Fórmula de riesgo económico**")
+        st.latex(r"RE_i = \left(\frac{IRI_i}{100}\right) \times VS_i")
+        st.caption(
+            "REᵢ = riesgo económico del SKU i; IRIᵢ = Índice de Riesgo de "
+            "Inmovilización (0–100); VSᵢ = valor monetario del stock del SKU i."
+        )
+        if pd.notna(valor_stock_a) and pd.notna(riesgo_economico_a):
+            st.write(
+                f"Para este caso: RE = ({iri:.0f}/100) × "
+                f"{formato_moneda(valor_stock_a)} = "
+                f"**{formato_moneda(riesgo_economico_a)}**."
+            )
 
         cobertura_ok = pd.isna(cobertura) or cobertura > 2
         factible = iri >= 81 and stock >= necesidad and cobertura_ok
@@ -1196,6 +1275,18 @@ if col_sku is not None and col_iri is not None and col_valor is not None:
     resumen_pareto["Riesgo_economico"] = (
         (resumen_pareto["IRI"].clip(0, 100) / 100.0)
         * resumen_pareto["Valor_stock"].clip(lower=0)
+    )
+
+    # Nivel relativo de riesgo económico: Bajo <= P50; Medio P50-P80; Alto > P80.
+    p50_re = resumen_pareto["Riesgo_economico"].quantile(0.50)
+    p80_re = resumen_pareto["Riesgo_economico"].quantile(0.80)
+    resumen_pareto["Nivel_riesgo_economico"] = np.select(
+        [
+            resumen_pareto["Riesgo_economico"] > p80_re,
+            resumen_pareto["Riesgo_economico"] > p50_re,
+        ],
+        ["ALTO", "MEDIO"],
+        default="BAJO",
     )
 
     resumen_pareto = (
@@ -1297,6 +1388,7 @@ if col_sku is not None and col_iri is not None and col_valor is not None:
             "IRI",
             "Valor_stock",
             "Riesgo_economico",
+            "Nivel_riesgo_economico",
             "Riesgo_economico_acumulado_%",
             "Prioridad_80_20",
         ]
